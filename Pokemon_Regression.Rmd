@@ -1,0 +1,354 @@
+---
+title: "Pokemon_Regression"
+output: html_document
+---
+```{r include = TRUE}
+library(dplyr)
+library(pROC)
+library(caret)
+```
+
+## Read files
+
+```{r include = TRUE}
+pokemon<-read.csv("pokemon.csv",sep=",",stringsAsFactors=F)
+colnames(pokemon)<-c("id","Name","Type.1","Type.2","HP","Attack","Defense","Sp.Atk","Sp.Def","Speed","Generation","Legendary")
+
+test_combats<-read.csv('combats.csv',sep=",",stringsAsFactors=F)
+names <- pokemon %>% dplyr::select(id, Name)
+```
+
+## Find names
+
+```{r include = TRUE}
+test_combats$First_pokemon_name<-sapply(test_combats$First_pokemon, function(x) names$Name[match(x, names$id)])
+test_combats$Second_pokemon_name<-sapply(test_combats$Second_pokemon, function(x) names$Name[match(x, names$id)])
+```
+
+## Add STATS for both pokemons
+## Include difference in both pokemons stats 
+## Difference in each type of stats is a feature for logistic regression later
+
+```{r include = TRUE}
+test_combats$First_pokemon_attack<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Attack[match(x, pokemon$Name)])
+test_combats$Second_pokemon_attack<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Attack[match(x, pokemon$Name)])
+test_combats$Diff_attack<-test_combats$First_pokemon_attack - test_combats$Second_pokemon_attack
+
+test_combats$winner_first_label<-ifelse(test_combats$Winner==test_combats$First_pokemon,'yes','no')
+
+test_combats$First_pokemon_defense<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Defense[match(x, pokemon$Name)])
+test_combats$Second_pokemon_defense<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Defense[match(x, pokemon$Name)])
+test_combats$Diff_defense<-test_combats$First_pokemon_defense - test_combats$Second_pokemon_defense
+
+test_combats$First_pokemon_sp_defense<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Sp.Def[match(x, pokemon$Name)])
+test_combats$Second_pokemon_sp_defense<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Sp.Def[match(x, pokemon$Name)])
+test_combats$Diff_sp_defense<-test_combats$First_pokemon_sp_defense - test_combats$Second_pokemon_sp_defense
+
+test_combats$First_pokemon_sp_attack<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Sp.Atk[match(x, pokemon$Name)])
+test_combats$Second_pokemon_sp_attack<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Sp.Atk[match(x, pokemon$Name)])
+test_combats$Diff_sp_attack<-test_combats$First_pokemon_sp_attack - test_combats$Second_pokemon_sp_attack
+
+test_combats$First_pokemon_speed<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Speed[match(x, pokemon$Name)])
+test_combats$Second_pokemon_speed<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Speed[match(x, pokemon$Name)])
+test_combats$Diff_speed<-test_combats$First_pokemon_speed - test_combats$Second_pokemon_speed
+
+test_combats$First_pokemon_HP<-sapply(test_combats$First_pokemon_name, function(x) pokemon$HP[match(x, pokemon$Name)])
+test_combats$Second_pokemon_HP<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$HP[match(x, pokemon$Name)])
+test_combats$Diff_HP<-test_combats$First_pokemon_HP - test_combats$Second_pokemon_HP
+```
+
+## Add each pokemon's type and legendary status
+
+```{r include = TRUE}
+test_combats$First_pokemon_type<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Type.1[match(x, pokemon$Name)])
+test_combats$Second_pokemon_type<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Type.1[match(x, pokemon$Name)])
+test_combats$First_pokemon_legendary<-sapply(test_combats$First_pokemon_name, function(x) pokemon$Legendary[match(x, pokemon$Name)])
+test_combats$Second_pokemon_legendary<-sapply(test_combats$Second_pokemon_name, function(x) pokemon$Legendary[match(x, pokemon$Name)])
+```
+
+##Modify Type advantage
+
+```{r include = TRUE}
+atk<-c('Normal','Fire','Water','Electric','Grass','Ice','Fighting','Poison','Ground','Flying','Psychic','Bug','Rock','Ghost','Dragon','Dark','Steel','Fairy')
+normal<-c(1,1,1,1,1,1,2,1,1,1,1,1,1,0,1,1,1,1)
+fire<-c(1,0.5,2,1,0.5,0.5,1,1,2,1,1,0.5,2,1,1,1,0.5,0.5)
+water<-c(1,0.5,0.5,2,2,0.5,1,1,1,1,1,1,1,1,1,1,0.5,1)
+elec<-c(1,1,1,0.5,1,1,1,1,2,0.5,1,1,1,1,1,1,0.5,1)
+grass<-c(1,2,0.5,0.5,0.5,2,1,2,0.5,2,1,2,1,1,1,1,1,1)
+ice<-c(1,2,1,1,1,0.5,2,1,1,1,1,1,2,1,1,1,2,1)
+fighting<-c(1,1,1,1,1,1,1,1,1,2,2,0.5,0.5,1,1,0.5,1,2)
+poison<-c(1,1,1,1,0.5,1,0.5,0.5,2,1,2,0.5,1,1,1,1,1,0.5)
+ground<-c(1,1,2,0,2,2,1,0.5,1,1,1,1,0.5,1,1,1,1,1)
+flying<-c(1,1,1,2,0.5,2,0.5,1,0,1,1,0.5,2,1,1,1,1,1)
+psychic<-c(1,1,1,1,1,1,0.5,1,1,1,0.5,2,1,2,1,2,1,1)
+bug<-c(1,2,1,1,0.5,1,0.5,1,0.5,2,1,1,2,1,1,1,1,1)
+rock<-c(0.5,0.5,2,1,2,1,2,0.5,2,0.5,1,1,1,1,1,1,2,1)
+ghost<-c(0,1,1,1,1,1,0,0.5,1,1,1,0.5,1,2,1,2,1,1)
+dragon<-c(1,0.5,0.5,0.5,0.5,2,1,1,1,1,1,1,1,1,2,1,1,2)
+dark<-c(1,1,1,1,1,1,2,1,1,1,0,2,1,0.5,1,0.5,1,2)
+steel<-c(0.5,2,1,1,0.5,0.5,2,0,2,0.5,0.5,0.5,0.5,1,0.5,1,0.5,0.5)
+fairy<-c(1,1,1,1,1,1,0.5,2,1,1,1,0.5,1,1,0,0.5,2,1)
+mytable<-data.frame(Attacking=atk,Normal=normal,Fire=fire,Water=water,Electric=elec,Grass=grass,Ice=ice,Fighting=fighting,Poison=poison,Ground=ground,Flying=flying,Psychic=psychic,Bug=bug,Rock=rock,Ghost=ghost,Dragon=dragon,Dark=dark,Steel=steel,Fairy=fairy)
+
+makeAdvantage2<-function(type_1,type_2){
+  val <- mytable[ which(mytable$Attacking==type_1),c(type_2)]
+  if(val==0){
+    return('no effect')
+  }
+  else if(val==0.5){
+    return('not too effective')
+  }
+  else if(val==1){
+    return('normal')
+  }
+  else if(val==2){
+    return('effective')
+  }
+}
+```
+
+## Add advantage to testcombats and re-run logistic regression
+
+```{r include = TRUE}
+test_combats$advantage<-mapply(makeAdvantage2, test_combats$First_pokemon_type, test_combats$Second_pokemon_type)
+```
+
+## Scale numerical features
+
+```{r include = TRUE}
+temp <- data.frame(test_combats %>% dplyr::select(winner_first_label,Diff_attack ,Diff_defense, Diff_sp_defense,Diff_sp_attack,Diff_speed ,Diff_HP, First_pokemon_legendary, Second_pokemon_legendary, advantage))
+ind <- sapply(temp, is.numeric)
+temp[ind] <- lapply(temp[ind], scale)
+temp2 = temp
+```
+
+## Data partition
+
+```{r include = TRUE}
+
+set.seed(1234)
+split <- createDataPartition(y=temp2$winner_first_label, p = 0.75, list = FALSE)
+train <- temp2[split,]
+test <- temp2[-split,]
+```
+
+## Train logistic regression full model 
+```{r include = TRUE}
+train$winner_first_label <- factor(train$winner_first_label)
+model1 <- glm(winner_first_label~., data=train, binomial(link='logit'))
+summary(model1)
+```
+
+## Initial results on training data (including all variables) (MODEL 1)
+glm(formula = winner_first_label ~ ., family = binomial(), data = train)
+
+Deviance Residuals: 
+    Min       1Q   Median       3Q      Max  
+-4.3252  -0.4970  -0.0421   0.4869   4.3616  
+
+Coefficients:
+                              Estimate Std. Error z value Pr(>|z|)    
+(Intercept)                    0.29082    0.04150   7.009 2.41e-12 ***
+Diff_attack                    0.44801    0.02200  20.362  < 2e-16 ***
+Diff_defense                   0.08042    0.02056   3.911 9.18e-05 ***
+Diff_sp_defense                0.04707    0.02189   2.150   0.0316 *  
+Diff_sp_attack                -0.05174    0.02222  -2.328   0.0199 *  
+Diff_speed                     2.89537    0.03291  87.969  < 2e-16 ***
+Diff_HP                        0.09379    0.01830   5.125 2.97e-07 ***
+First_pokemon_legendaryTrue   -0.11620    0.06658  -1.745   0.0809 .  
+Second_pokemon_legendaryTrue   0.12240    0.06884   1.778   0.0754 .  
+advantageno effect           -21.53340  109.22622  -0.197   0.8437    
+advantagenormal               -0.48104    0.04560 -10.548  < 2e-16 ***
+advantagenot too effective    -0.71734    0.05432 -13.207  < 2e-16 ***
+---
+Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+(Dispersion parameter for binomial family taken to be 1)
+
+    Null deviance: 51870  on 37500  degrees of freedom
+Residual deviance: 25478  on 37489  degrees of freedom
+AIC: 25502
+
+## Predict probability of 1st Pokemon that attacks wins
+```{r include = TRUE}
+y = test$winner_first_label
+test$winner_first_label = NULL
+y_pred = predict(model1, test, type="response")
+test$winner_first_label = y
+test$pred = y_pred
+```
+
+## ROC AUC based on predictions on test data (MODEL 1)
+
+```{r include = TRUE}
+test_roc <- model.matrix(~., test)
+test_roc_df = as.data.frame(test_roc)
+g <- roc(winner_first_labelyes ~ pred, data = test_roc_df)
+```
+Call:
+roc.formula(formula = winner_first_labelyes ~ pred, data = test_roc_df)
+
+Data: pred in 6599 controls (winner_first_labelyes 0) < 5900 cases (winner_first_labelyes 1).
+Area under the curve: 0.9403
+```{r include = TRUE}
+train_new = train
+train_new$First_pokemon_legendary = NULL
+train_new$Second_pokemon_legendary = NULL
+model2 = glm(winner_first_label~., data=train_new, binomial())
+summary(model2)
+```
+## Results on training data after dropping legendary statuses ONLY (MODEL 2)
+Call:
+glm(formula = winner_first_label ~ ., family = binomial(), data = train_new)
+
+Deviance Residuals: 
+    Min       1Q   Median       3Q      Max  
+-4.3374  -0.4950  -0.0417   0.4864   4.3485  
+
+Coefficients:
+                            Estimate Std. Error z value Pr(>|z|)    
+(Intercept)                  0.29302    0.04105   7.138 9.50e-13 ***
+Diff_attack                  0.44377    0.02192  20.246  < 2e-16 ***
+Diff_defense                 0.07720    0.02052   3.763 0.000168 ***
+Diff_sp_defense              0.04031    0.02170   1.858 0.063178 .  
+Diff_sp_attack              -0.05959    0.02197  -2.713 0.006668 ** 
+Diff_speed                   2.88833    0.03274  88.232  < 2e-16 ***
+Diff_HP                      0.09230    0.01829   5.047 4.49e-07 ***
+advantageno effect         -21.53354  109.18051  -0.197 0.843649    
+advantagenormal             -0.48295    0.04559 -10.593  < 2e-16 ***
+advantagenot too effective  -0.71848    0.05430 -13.232  < 2e-16 ***
+---
+Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+(Dispersion parameter for binomial family taken to be 1)
+
+    Null deviance: 51870  on 37500  degrees of freedom
+Residual deviance: 25483  on 37491  degrees of freedom
+AIC: 25503
+
+```{r include = TRUE}
+y = test$winner_first_label
+test$winner_first_label = NULL
+y_pred = predict(model2, test, type="response")
+test$winner_first_label = y
+test$pred = y_pred
+```
+
+## ROC AUC based on predictions on test data (MODEL 2)
+```{r include = TRUE}
+test_roc <- model.matrix(~., test)
+test_roc_df = as.data.frame(test_roc)
+g <- roc(winner_first_labelyes ~ pred, data = test_roc_df)
+```
+Call:
+roc.formula(formula = winner_first_labelyes ~ pred, data = test_roc_df)
+
+Data: pred in 6599 controls (winner_first_labelyes 0) < 5900 cases (winner_first_labelyes 1).
+Area under the curve: 0.9402
+
+## Since ROC AUC is almost similar for both models, we drop variables about legendary status for a simpler model. It is interesting that the legendary status does not explain variance in probability, this is most certainly we lack ways to quantify differences in their legendary statuses and include them in the model.
+
+```{r include = TRUE}
+train_new2 = train_new
+train_new2$advantage = NULL
+model3 = glm(winner_first_label~., data=train_new2, binomial())
+summary(model3)
+```
+## Results on training data after dropping 'advantage' (MODEL 3)
+
+Call:
+glm(formula = winner_first_label ~ ., family = binomial(), data = train_new2)
+
+Deviance Residuals: 
+    Min       1Q   Median       3Q      Max  
+-4.1738  -0.5500  -0.0894   0.5522   4.1816  
+
+Coefficients:
+                Estimate Std. Error z value Pr(>|z|)    
+(Intercept)     -0.23658    0.01518 -15.580  < 2e-16 ***
+Diff_attack      0.42682    0.02092  20.404  < 2e-16 ***
+Diff_defense     0.07718    0.01960   3.938 8.21e-05 ***
+Diff_sp_defense  0.04072    0.02078   1.959  0.05007 .  
+Diff_sp_attack  -0.05814    0.02092  -2.779  0.00545 ** 
+Diff_speed       2.63855    0.02969  88.867  < 2e-16 ***
+Diff_HP          0.07935    0.01744   4.549 5.38e-06 ***
+---
+Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+(Dispersion parameter for binomial family taken to be 1)
+
+    Null deviance: 51870  on 37500  degrees of freedom
+Residual deviance: 27613  on 37494  degrees of freedom
+AIC: 27627
+
+Number of Fisher Scoring iterations: 6
+
+```{r include = TRUE}
+y = test$winner_first_label
+test$winner_first_label = NULL
+y_pred = predict(model3, test, type="response")
+test$winner_first_label = y
+test$pred = y_pred
+```
+
+## ROC AUC based on predictions on test data (MODEL 3)
+
+```{r include = TRUE}
+test_roc <- model.matrix(~., test)
+test_roc_df = as.data.frame(test_roc)
+g <- roc(winner_first_labelyes ~ pred, data = test_roc_df)
+```
+Call:
+roc.formula(formula = winner_first_labelyes ~ pred, data = test_roc_df)
+
+Data: pred in 6599 controls (winner_first_labelyes 0) < 5900 cases (winner_first_labelyes 1).
+Area under the curve: 0.9294
+
+## Since ROC AUC drops from 0.9402 in MODEL 2, we keep move advantage variable even though one of the levels is not statistically significant at 5% level. 
+
+## WE CHOOSE MODEL 2 SINCE ROC AUC IS HIGH (almost comparable to Model 1). It also has a low AIC (almost comparable to Model 1). Yet, it is a simpler model than Model 1. 
+
+## We re-train MODEL 2 on all data (50K entries) to get final equation. 
+```{r include = TRUE}
+temp2$winner_first_label <- factor(temp2$winner_first_label)
+temp2$First_pokemon_legendary = NULL
+temp2$Second_pokemon_legendary = NULL
+model_final = glm(winner_first_label~., data=temp2, binomial(link='logit'))
+summary(model_final)
+```
+## Results on training ALL data after (MODEL 2)
+
+Call:
+glm(formula = winner_first_label ~ ., family = binomial(link = "logit"), 
+    data = temp2)
+
+Deviance Residuals: 
+    Min       1Q   Median       3Q      Max  
+-4.3632  -0.4934  -0.0399   0.4841   4.5726  
+
+Coefficients:
+                            Estimate Std. Error z value Pr(>|z|)    
+(Intercept)                  0.27197    0.03548   7.665 1.79e-14 ***
+Diff_attack                  0.45904    0.01906  24.079  < 2e-16 ***
+Diff_defense                 0.07292    0.01784   4.088 4.34e-05 ***
+Diff_sp_defense              0.03940    0.01890   2.085  0.03709 *  
+Diff_sp_attack              -0.05054    0.01912  -2.643  0.00822 ** 
+Diff_speed                   2.91264    0.02859 101.894  < 2e-16 ***
+Diff_HP                      0.09047    0.01602   5.648 1.63e-08 ***
+advantageno effect         -21.57307   93.91885  -0.230  0.81833    
+advantagenormal             -0.46518    0.03943 -11.799  < 2e-16 ***
+advantagenot too effective  -0.68638    0.04709 -14.576  < 2e-16 ***
+---
+Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+(Dispersion parameter for binomial family taken to be 1)
+
+    Null deviance: 69158  on 49999  degrees of freedom
+Residual deviance: 33819  on 49990  degrees of freedom
+AIC: 33839
+
+Number of Fisher Scoring iterations: 16
+
+## Equation is as follows:
+
+Pr(attacking pokemon wins) = exp(0.27197 + 0.45904*Diff_attack + 0.07292*Diff_defense + 0.03940*Diff_sp_defense -0.05054*Diff_sp_attack + 2.91264*Diff_speed + 0.09047*Diff_HP + -21.57307*advantageno_effect -0.46518*advantagenormal -0.68638*advantagenot_too_effective) / [1 + exp(0.27197 + 0.45904*Diff_attack + 0.07292*Diff_defense + 0.03940*Diff_sp_defense -0.05054*Diff_sp_attack + 2.91264*Diff_speed + 0.09047*Diff_HP + -21.57307*advantageno_effect -0.46518*advantagenormal -0.68638*advantagenot_too_effective)]
